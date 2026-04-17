@@ -1,10 +1,10 @@
 /**
  * 产品服务
  * 
- * 提供产品数据的 CRUD 操作
+ * 提供产品数据的 CRUD 操作（基于 OSS）
  */
 
-import { githubService } from './github.js';
+import { ossService } from './oss.js';
 import { logger } from './logger.js';
 import { ApiError } from '../middleware/errorHandler.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -12,15 +12,14 @@ import { v4 as uuidv4 } from 'uuid';
 class ProductService {
   constructor() {
     this.cache = null;
-    this.cacheSha = null;
     this.cacheTime = null;
-    this.CACHE_TTL = 60000; // 1 分钟缓存
+    this.CACHE_TTL = 30000; // 30 秒缓存（零延迟）
   }
 
   /**
-   * 获取缓存的产品数据
+   * 获取产品数据（带缓存）
    */
-  async getProducts(token, forceRefresh = false) {
+  async getProducts(forceRefresh = false) {
     // 检查缓存
     if (!forceRefresh && this.cache && this.cacheTime) {
       const elapsed = Date.now() - this.cacheTime;
@@ -28,23 +27,22 @@ class ProductService {
         logger.debug('使用缓存的产品数据');
         return {
           products: this.cache,
-          sha: this.cacheSha,
           fromCache: true
         };
       }
     }
 
-    // 从 GitHub 获取
-    const result = await githubService.getProducts(token);
-    
+    // 从 OSS 读取最新数据
+    const result = await ossService.getBuffer('products.json');
+    const content = result.toString('utf-8');
+    const products = JSON.parse(content);
+
     // 更新缓存
-    this.cache = result.products;
-    this.cacheSha = result.sha;
+    this.cache = products;
     this.cacheTime = Date.now();
 
     return {
-      products: result.products,
-      sha: result.sha,
+      products: products,
       fromCache: false
     };
   }
@@ -52,8 +50,8 @@ class ProductService {
   /**
    * 获取单个产品
    */
-  async getProduct(id, token) {
-    const { products } = await this.getProducts(token);
+  async getProduct(id) {
+    const { products } = await this.getProducts();
     
     const product = products.find(p => 
       String(p.id) === String(id) || 
@@ -70,8 +68,8 @@ class ProductService {
   /**
    * 搜索产品
    */
-  async searchProducts(params, token) {
-    const { products } = await this.getProducts(token);
+  async searchProducts(params) {
+    const { products } = await this.getProducts();
     const {
       search = '',
       category = null,
@@ -176,8 +174,8 @@ class ProductService {
   /**
    * 创建产品
    */
-  async createProduct(data, token) {
-    const { products, sha } = await this.getProducts(token);
+  async createProduct(data) {
+    const { products } = await this.getProducts();
 
     // 生成新 ID
     const maxId = products.reduce((max, p) => Math.max(max, parseInt(p.id) || 0), 0);
@@ -205,8 +203,9 @@ class ProductService {
     // 添加到数组开头
     products.unshift(newProduct);
 
-    // 保存到 GitHub
-    await githubService.saveProducts(products, sha, token);
+    // 保存到 OSS
+    const content = JSON.stringify(products, null, 2);
+    await ossService.putBuffer('products.json', Buffer.from(content));
 
     // 清除缓存
     this.clearCache();
@@ -222,8 +221,8 @@ class ProductService {
   /**
    * 更新产品
    */
-  async updateProduct(id, data, token) {
-    const { products, sha } = await this.getProducts(token);
+  async updateProduct(id, data) {
+    const { products } = await this.getProducts();
 
     const index = products.findIndex(p => 
       String(p.id) === String(id) || 
@@ -246,7 +245,7 @@ class ProductService {
     if (data.name) updatedProduct.title = data.name;
     if (data.title) updatedProduct.name = data.title;
     if (data.oem) updatedProduct.oemCode = data.oem;
-    if (data.oemCode) updatedProduct.oem = data.oemCode;
+    if (data.oemCode) updatedProduct.oem = data.oem;
     if (data.images) {
       updatedProduct.images = data.images;
       updatedProduct.image = data.images.join(',');
@@ -258,8 +257,9 @@ class ProductService {
 
     products[index] = updatedProduct;
 
-    // 保存到 GitHub
-    await githubService.saveProducts(products, sha, token);
+    // 保存到 OSS
+    const content = JSON.stringify(products, null, 2);
+    await ossService.putBuffer('products.json', Buffer.from(content));
 
     // 清除缓存
     this.clearCache();
@@ -275,8 +275,8 @@ class ProductService {
   /**
    * 删除产品
    */
-  async deleteProduct(id, token) {
-    const { products, sha } = await this.getProducts(token);
+  async deleteProduct(id) {
+    const { products } = await this.getProducts();
 
     const index = products.findIndex(p => 
       String(p.id) === String(id) || 
@@ -292,8 +292,9 @@ class ProductService {
     // 从数组中移除
     products.splice(index, 1);
 
-    // 保存到 GitHub
-    await githubService.saveProducts(products, sha, token);
+    // 保存到 OSS
+    const content = JSON.stringify(products, null, 2);
+    await ossService.putBuffer('products.json', Buffer.from(content));
 
     // 清除缓存
     this.clearCache();
@@ -309,12 +310,12 @@ class ProductService {
   /**
    * 批量删除产品
    */
-  async batchDelete(ids, token) {
+  async batchDelete(ids) {
     if (!Array.isArray(ids) || ids.length === 0) {
       throw new ApiError(400, '请提供要删除的产品 ID 列表', 'INVALID_IDS');
     }
 
-    const { products, sha } = await this.getProducts(token);
+    const { products } = await this.getProducts();
 
     const idSet = new Set(ids.map(id => String(id)));
     const deleted = [];
@@ -340,8 +341,9 @@ class ProductService {
       throw new ApiError(404, '未找到要删除的产品', 'NO_PRODUCTS_FOUND');
     }
 
-    // 保存到 GitHub
-    await githubService.saveProducts(remaining, sha, token);
+    // 保存到 OSS
+    const content = JSON.stringify(remaining, null, 2);
+    await ossService.putBuffer('products.json', Buffer.from(content));
 
     // 清除缓存
     this.clearCache();
@@ -359,12 +361,12 @@ class ProductService {
   /**
    * 批量添加产品
    */
-  async batchCreate(productsData, token) {
+  async batchCreate(productsData) {
     if (!Array.isArray(productsData) || productsData.length === 0) {
       throw new ApiError(400, '请提供产品数据列表', 'INVALID_DATA');
     }
 
-    const { products, sha } = await this.getProducts(token);
+    const { products } = await this.getProducts();
 
     // 获取最大 ID
     const maxId = products.reduce((max, p) => Math.max(max, parseInt(p.id) || 0), 0);
@@ -390,8 +392,9 @@ class ProductService {
     // 添加到数组开头
     products.unshift(...newProducts);
 
-    // 保存到 GitHub
-    await githubService.saveProducts(products, sha, token);
+    // 保存到 OSS
+    const content = JSON.stringify(products, null, 2);
+    await ossService.putBuffer('products.json', Buffer.from(content));
 
     // 清除缓存
     this.clearCache();
@@ -410,7 +413,6 @@ class ProductService {
    */
   clearCache() {
     this.cache = null;
-    this.cacheSha = null;
     this.cacheTime = null;
     logger.debug('产品缓存已清除');
   }

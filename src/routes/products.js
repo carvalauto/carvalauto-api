@@ -1,12 +1,11 @@
 /**
  * 产品管理路由
  * 
- * 提供产品的 CRUD API
+ * 提供产品的 CRUD API（基于 OSS）
  */
 
 import { Router } from 'express';
 import { asyncHandler, ApiError } from '../middleware/errorHandler.js';
-import { githubAuth } from '../middleware/auth.js';
 import { productService } from '../services/product.js';
 import { logAudit, logSecurity } from '../services/logger.js';
 
@@ -36,7 +35,7 @@ router.get('/', asyncHandler(async (req, res) => {
     limit: safeLimit,
     sortBy,
     sortOrder
-  }, process.env.GH_TOKEN);
+  });
 
   // 设置分页头
   res.setHeader('X-Total-Count', result.pagination.total);
@@ -59,7 +58,7 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const product = await productService.getProduct(id, process.env.GH_TOKEN);
+  const product = await productService.getProduct(id);
 
   res.json({
     success: true,
@@ -71,10 +70,9 @@ router.get('/:id', asyncHandler(async (req, res) => {
  * POST /api/products
  * 创建新产品
  */
-router.post('/', githubAuth, asyncHandler(async (req, res) => {
+router.post('/', asyncHandler(async (req, res) => {
   const { product, totalProducts } = await productService.createProduct(
-    req.body,
-    req.githubToken
+    req.body
   );
 
   // 审计日志
@@ -95,7 +93,7 @@ router.post('/', githubAuth, asyncHandler(async (req, res) => {
  * PUT /api/products/:id
  * 更新产品
  */
-router.put('/:id', githubAuth, asyncHandler(async (req, res) => {
+router.put('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   // 安全检查：禁止通过 body 修改 id
@@ -105,8 +103,7 @@ router.put('/:id', githubAuth, asyncHandler(async (req, res) => {
 
   const { product, totalProducts } = await productService.updateProduct(
     id,
-    req.body,
-    req.githubToken
+    req.body
   );
 
   // 审计日志
@@ -127,7 +124,7 @@ router.put('/:id', githubAuth, asyncHandler(async (req, res) => {
  * DELETE /api/products/:id
  * 删除单个产品
  */
-router.delete('/:id', githubAuth, asyncHandler(async (req, res) => {
+router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { confirm } = req.query;
 
@@ -142,7 +139,7 @@ router.delete('/:id', githubAuth, asyncHandler(async (req, res) => {
     });
   }
 
-  const result = await productService.deleteProduct(id, req.githubToken);
+  const result = await productService.deleteProduct(id);
 
   // 审计日志
   logAudit('DELETE_PRODUCT', req.user, {
@@ -162,7 +159,7 @@ router.delete('/:id', githubAuth, asyncHandler(async (req, res) => {
  * POST /api/products/batch-delete
  * 批量删除产品
  */
-router.post('/batch-delete', githubAuth, asyncHandler(async (req, res) => {
+router.post('/batch-delete', asyncHandler(async (req, res) => {
   const { ids } = req.body;
   const { confirm } = req.query;
 
@@ -187,7 +184,7 @@ router.post('/batch-delete', githubAuth, asyncHandler(async (req, res) => {
     throw new ApiError(400, '单次最多删除 50 个产品', 'TOO_MANY_DELETES');
   }
 
-  const result = await productService.batchDelete(ids, req.githubToken);
+  const result = await productService.batchDelete(ids);
 
   // 审计日志
   logAudit('BATCH_DELETE_PRODUCTS', req.user, {
@@ -196,7 +193,7 @@ router.post('/batch-delete', githubAuth, asyncHandler(async (req, res) => {
   });
 
   // 安全警告日志
-  if (result.deletedCount > 10) {
+  if (result.deletedCount >= 10) {
     logSecurity('BATCH_DELETE', {
       user: req.user,
       deletedCount: result.deletedCount
@@ -216,7 +213,7 @@ router.post('/batch-delete', githubAuth, asyncHandler(async (req, res) => {
  * POST /api/products/batch-create
  * 批量创建产品
  */
-router.post('/batch-create', githubAuth, asyncHandler(async (req, res) => {
+router.post('/batch-create', asyncHandler(async (req, res) => {
   const { products } = req.body;
 
   if (!products || !Array.isArray(products) || products.length === 0) {
@@ -228,7 +225,7 @@ router.post('/batch-create', githubAuth, asyncHandler(async (req, res) => {
     throw new ApiError(400, '单次最多创建 100 个产品', 'TOO_MANY_PRODUCTS');
   }
 
-  const result = await productService.batchCreate(products, req.githubToken);
+  const result = await productService.batchCreate(products);
 
   // 审计日志
   logAudit('BATCH_CREATE_PRODUCTS', req.user, {
@@ -248,7 +245,7 @@ router.post('/batch-create', githubAuth, asyncHandler(async (req, res) => {
  * 获取产品统计信息
  */
 router.get('/stats/summary', asyncHandler(async (req, res) => {
-  const { products } = await productService.getProducts(process.env.GH_TOKEN);
+  const { products } = await productService.getProducts();
 
   // 计算统计
   const categoryStats = productService.getCategoryStats(products);
@@ -282,8 +279,10 @@ router.get('/stats/summary', asyncHandler(async (req, res) => {
       categoryStats,
       topOems,
       lastUpdated,
-      hasImages: products.filter(p => p.images?.length > 0 || p.image).length,
-      withoutImages: products.filter(p => !p.images?.length && !p.image).length
+      hasImages: products.filter(p => 
+        p.images?.length > 0 || p.image).length,
+      withoutImages: products.filter(p => 
+        !p.images?.length && !p.image).length
     }
   });
 }));
@@ -292,14 +291,11 @@ router.get('/stats/summary', asyncHandler(async (req, res) => {
  * POST /api/products/refresh
  * 刷新缓存
  */
-router.post('/refresh', githubAuth, asyncHandler(async (req, res) => {
+router.post('/refresh', asyncHandler(async (req, res) => {
   productService.clearCache();
   
   // 重新获取
-  const { products, sha } = await productService.getProducts(
-    req.githubToken,
-    true
-  );
+  const { products } = await productService.getProducts(true);
 
   res.json({
     success: true,
