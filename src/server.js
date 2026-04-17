@@ -22,6 +22,7 @@ config();
 // 导入路由
 import healthRoutes from './routes/health.js';
 import productRoutes from './routes/products.js';
+import inquiryRoutes from './routes/inquiries.js';
 import syncRoutes from './routes/sync.js';
 
 // 导入中间件
@@ -120,6 +121,9 @@ app.use('/api/health', healthRoutes);
 
 // 产品管理 API
 app.use('/api/products', productRoutes);
+
+// 询盘管理 API
+app.use('/api/inquiries', inquiryRoutes);
 
 // 同步 API
 app.use('/api/sync', syncRoutes);
