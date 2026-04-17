@@ -62,6 +62,9 @@ app.use(helmet({
 // CORS 配置
 app.use(cors(corsOptions));
 
+// 明确处理 OPTIONS 预检请求
+app.options('*', cors(corsOptions));
+
 // 请求日志
 app.use(requestLogger);
 
